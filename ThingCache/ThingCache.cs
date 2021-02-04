@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using FakeItEasy;
 using NUnit.Framework;
 
 namespace MockFramework
@@ -40,49 +41,54 @@ namespace MockFramework
         private const string thingId2 = "CoolBoots";
         private Thing thing2 = new Thing(thingId2);
 
-        // Метод, помеченный атрибутом SetUp, выполняется перед каждым тестов
         [SetUp]
         public void SetUp()
         {
-            //thingService = A...
+            thingService = A.Fake<IThingService>();
             thingCache = new ThingCache(thingService);
         }
 
-        // TODO: Написать простейший тест, а затем все остальные
-        // Live Template tt работает!
-
-        // Пример теста
         [Test]
-        public void GiveMeAGoodNamePlease()
+        public void SingleThingGetting()
         {
+            A.CallTo(() => thingService.TryRead(thingId1, out thing1)).Returns(true);
+            Assert.AreEqual(thing1, thingCache.Get(thingId1));
+            
+            Thing value;
+            A.CallTo(() => thingService.TryRead(A<string>.Ignored, out value)).MustHaveHappened();
         }
 
-        /** Проверки в тестах
-         * Assert.AreEqual(expectedValue, actualValue);
-         * actualValue.Should().Be(expectedValue);
-         */
+        [Test]
+        public void MultipleThingGetting()
+        {
+            A.CallTo(() => thingService.TryRead(thingId1, out thing1)).Returns(true);
+            A.CallTo(() => thingService.TryRead(thingId2, out thing2)).Returns(true);
 
-        /** Синтаксис AAA
-         * Arrange:
-         * var fake = A.Fake<ISomeService>();
-         * A.CallTo(() => fake.SomeMethod(...)).Returns(true);
-         * Assert:
-         * var value = "42";
-         * A.CallTo(() => fake.TryRead(id, out value)).MustHaveHappened();
-         */
+            Assert.AreEqual(thing1, thingCache.Get(thingId1));
+            Assert.AreEqual(thing1, thingCache.Get(thingId1));
+            Assert.AreEqual(thing1, thingCache.Get(thingId1));
+            Assert.AreEqual(thing1, thingCache.Get(thingId1));
 
-        /** Синтаксис out
-         * var value = "42";
-         * string _;
-         * A.CallTo(() => fake.TryRead(id, out _)).Returns(true)
-         *     .AssignsOutAndRefParameters(value);
-         * A.CallTo(() => fake.TryRead(id, out value)).Returns(true);
-         */
+            Assert.AreEqual(thing2, thingCache.Get(thingId2));
+            Assert.AreEqual(thing2, thingCache.Get(thingId2));
+            Assert.AreEqual(thing2, thingCache.Get(thingId2));
 
-        /** Синтаксис Repeat
-         * var value = "42";
-         * A.CallTo(() => fake.TryRead(id, out value))
-         *     .MustHaveHappened(Repeated.Exactly.Twice)
-         */
+            Thing value;
+            A.CallTo(() => thingService.TryRead(A<string>.Ignored, out value)).MustHaveHappened(2, Times.Exactly);
+        }
+
+        [Test]
+        public void GetNonExistThing()
+        {
+            var imagineThing = new Thing("ImagineThing");
+            A.CallTo(() => thingService.TryRead(A<string>.Ignored, out imagineThing)).Returns(false);
+            A.CallTo(() => thingService.TryRead(thingId1, out thing1)).Returns(true);
+
+            Assert.AreEqual(null, thingCache.Get("NonExistThing"));
+            
+            Thing value;
+            A.CallTo(() => thingService.TryRead(A<string>.Ignored, out value)).MustHaveHappened();
+        }
     }
+
 }
