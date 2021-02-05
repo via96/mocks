@@ -5,6 +5,7 @@ using FakeItEasy;
 using FileSender.Dependencies;
 using FluentAssertions;
 using NUnit.Framework;
+using System.ComponentModel;
 
 namespace FileSender
 {
@@ -61,6 +62,16 @@ namespace FileSender
             public File[] SkippedFiles { get; set; }
         }
     }
+    
+    public enum DocumentFormat
+    {
+        [System.ComponentModel.Description("3.1")]
+        Version31,
+        [System.ComponentModel.Description("4.0")]
+        Version40,
+        [System.ComponentModel.Description("2.2")]
+        Invalid
+    }
 
     //TODO: реализовать недостающие тесты
     [TestFixture]
@@ -75,12 +86,12 @@ namespace FileSender
         private File file;
         private byte[] signedContent;
 
+        private Random random;
+
         [SetUp]
         public void SetUp()
         {
-            // Постарайтесь вынести в SetUp всё неспецифическое конфигурирование так,
-            // чтобы в конкретных тестах осталась только специфика теста,
-            // без конфигурирования "обычного" сценария работы
+            random = new Random();
 
             file = new File("someFile", new byte[] {1, 2, 3});
             signedContent = new byte[] {1, 7};
@@ -89,6 +100,11 @@ namespace FileSender
             sender = A.Fake<ISender>();
             recognizer = A.Fake<IRecognizer>();
             fileSender = new FileSender(cryptographer, sender, recognizer);
+            
+            A.CallTo(() => cryptographer.Sign(A<byte[]>.Ignored, certificate))
+                .Returns(GenerateFileContent());
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored))
+                .Returns(true);
         }
 
         [TestCase("4.0")]
@@ -96,10 +112,7 @@ namespace FileSender
         public void Send_WhenGoodFormat(string format)
         {
             var document = new Document(file.Name, file.Content, DateTime.Now, format);
-            A.CallTo(() => recognizer.TryRecognize(file, out document))
-                .Returns(true);
-            A.CallTo(() => cryptographer.Sign(document.Content, certificate))
-                .Returns(signedContent);
+            file = RecognizeDocument(document);
             A.CallTo(() => sender.TrySend(signedContent))
                 .Returns(true);
 
@@ -108,52 +121,143 @@ namespace FileSender
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void Skip_WhenBadFormat()
         {
-            throw new NotImplementedException();
+            var document = GenerateDocument(DocumentFormat.Invalid, DateTime.Now);
+            file = RecognizeDocument(document);
+            
+            fileSender.SendFiles(new[] {file}, certificate)
+                .SkippedFiles.Should().Contain(new File[] {file});
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).MustNotHaveHappened();
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void Skip_WhenOlderThanAMonth()
         {
-            throw new NotImplementedException();
+            var document = GenerateDocument(DocumentFormat.Version40, DateTime.Now.AddMonths(-1));
+            file = RecognizeDocument(document);
+            
+            fileSender.SendFiles(new[] {file}, certificate)
+                .SkippedFiles.Should().Contain(new File[] {file});
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).MustNotHaveHappened();
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void Send_WhenYoungerThanAMonth()
         {
-            throw new NotImplementedException();
+            var document = GenerateDocument(DocumentFormat.Version40, DateTime.Now.AddMonths(1));
+            file = RecognizeDocument(document);
+            
+            fileSender.SendFiles(new[] {file}, certificate)
+                .SkippedFiles.Should().BeEmpty();
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).MustHaveHappened(1, Times.Exactly);
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void Skip_WhenSendFails()
         {
-            throw new NotImplementedException();
+            var document = GenerateDocument(DocumentFormat.Version40, DateTime.Now);
+            file = RecognizeDocument(document);
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored))
+                .Returns(false);
+            
+            fileSender.SendFiles(new[] {file}, certificate)
+                .SkippedFiles.Should().Contain(new File[] {file});
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).MustHaveHappened(1, Times.Exactly);
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void Skip_WhenNotRecognized()
         {
-            throw new NotImplementedException();
+            var document = GenerateDocument(DocumentFormat.Version40, DateTime.Now);
+            
+            fileSender.SendFiles(new[] {file}, certificate)
+                .SkippedFiles.Should().BeEquivalentTo(file);
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).MustNotHaveHappened();
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void IndependentlySend_WhenSeveralFilesAndSomeAreInvalid()
         {
-            throw new NotImplementedException();
+            var documents = new[]
+            {
+                GenerateDocument(DocumentFormat.Version40, DateTime.Now),
+                GenerateDocument(DocumentFormat.Invalid, DateTime.Now),
+                GenerateDocument(DocumentFormat.Version31, DateTime.Now),
+                GenerateDocument(DocumentFormat.Invalid, DateTime.Now)
+            };
+            var files = documents.Select(RecognizeDocument).ToArray();
+
+            fileSender.SendFiles(files, certificate)
+                .SkippedFiles.Should().BeEquivalentTo(files[1], files[3]);
+            
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).MustHaveHappened(2, Times.Exactly);
         }
 
         [Test]
-        [Ignore("Not implemented")]
         public void IndependentlySend_WhenSeveralFilesAndSomeCouldNotSend()
         {
-            throw new NotImplementedException();
+            var documents = new[]
+            {
+                GenerateDocument(DocumentFormat.Version40, DateTime.Now),
+                GenerateDocument(DocumentFormat.Version31, DateTime.Now),
+                GenerateDocument(DocumentFormat.Version31, DateTime.Now),
+                GenerateDocument(DocumentFormat.Version40, DateTime.Now)
+            };
+            var files = documents.Select(RecognizeDocument).ToArray();
+
+            A.CallTo(() => sender.TrySend(A<byte[]>.Ignored)).ReturnsNextFromSequence(true, false, true, false);
+            
+            fileSender.SendFiles(files, certificate)
+                .SkippedFiles.Should().BeEquivalentTo(files[1], files[3]);
+            
+        }
+
+        private File RecognizeDocument(Document document)
+        {
+            var recognized = new File(document.Name, document.Content);
+            A.CallTo(() => recognizer.TryRecognize(recognized, out document))
+                .Returns(true);
+            return recognized;
+        }
+
+        private byte[] GenerateFileContent()
+        {
+            var contentSize = random.Next(1, 10);
+            var content = new byte[contentSize];
+            random.NextBytes(content);
+            return content;
+        }
+
+        private Document GenerateDocument(DocumentFormat format, DateTime created)
+        {
+            return new Document(file.Name, GenerateFileContent(), created, GetDescription(format));
+        }
+        
+        private static string GetDescription(DocumentFormat value)
+        {
+            return value switch
+            {
+                DocumentFormat.Version31 => "3.1",
+                DocumentFormat.Version40 => "4.0",
+                DocumentFormat.Invalid => "2.2",
+                _ => ""
+            };
+        }
+        
+        [Test]
+        [Ignore("Not implemented")]
+        public void CheckDescription()
+        {
+            Assert.AreEqual("3.1", DocumentFormat.Version31.ToString());
+            Assert.AreEqual("4.0", DocumentFormat.Version40.ToString());
+            Assert.AreEqual("2.2", DocumentFormat.Invalid.ToString());
         }
     }
 }
